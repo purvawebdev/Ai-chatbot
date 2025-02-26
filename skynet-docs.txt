@@ -1,0 +1,15 @@
+Skynet is a decentralized CDN and file-sharing platform developed by DeCloud Labs, built on top of the Sia blockchain network.
+Skynet's architecture uses distributed nodes to store encrypted file shards across global locations for censorship-resistant storage.
+The platform offers permanent file storage with no central authority controlling data access or deletion.
+Skynet uses the Sia blockchain for storage contracts and the native SKY token for network transactions and incentives.
+Developers can use Skynet's SDK to integrate decentralized storage into applications via simple API calls.
+Skynet Portal provides user-friendly access to upload/download files with decentralized URLs like "siasky.net/[hash]".
+Skynet's "Skapp" feature allows hosting full-stack decentralized applications (DApps) directly on the network.
+The network uses erasure coding to ensure data redundancy while minimizing storage overhead compared to traditional RAID systems.
+Skynet supports encrypted file sharing with user-controlled keys and optional password protection.
+DeCloud Labs recently introduced "MySky" - a decentralized identity system that enables personalized data storage across Skynet apps.
+Skynet's bandwidth monetization allows node operators to earn SKY tokens for serving content to users.
+The platform achieves 99.9% uptime through its distributed node network and blockchain-backed storage contracts.
+Skynet supports large file uploads up to 1TB through its parallel chunking and streaming upload system.
+Developers can use SkynetDB to store structured data in a decentralized database format.
+Skynet integrates with Web3 wallets like MetaMask for seamless cryptocurrency payments and authentication.

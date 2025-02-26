@@ -1,0 +1,7 @@
+node_modules
+
+
+
+faiss_store/docstore.json
+faiss_store/faiss.index
+.env

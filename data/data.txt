@@ -1,0 +1,3 @@
+AI assistants are software programs that understand natural language.
+LangChain is a framework for building AI applications with LLMs.
+Skynet was built by Decloud Labs
