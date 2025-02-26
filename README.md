@@ -65,17 +65,19 @@ curl -X POST http://localhost:3000/api/chat \
      -d '{"message": "What is Skynet?"}
 ```  
 5.API Reference 📚
-Endpoint	Method	Description
+
+```bash
+#Endpoint	Method	Description
 /api/initialize	POST	Initialize document store
 /api/chat	POST	Submit natural language query
-
+```
 6.Troubleshooting 🔧
 Common Issues:
 # Connection refused
 Ensure Ollama is running: ollama serve
 
 # Missing dependencies
-pip install transformers torch
+npm install express @langchain/community @langchain/core langchain multer csv-parser dotenv @xenova/transformers
 
 # FAISS load errors
 Delete the faiss_store folder and reinitialize
