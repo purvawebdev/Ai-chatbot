@@ -30,8 +30,8 @@ A Retrieval-Augmented Generation (RAG) system that enables natural language quer
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/rag-qa-system.git
-cd rag-qa-system
+git clone https://github.com/purvawebdev/Ai-chatbot.git
+cd Ai-chatbot.git
 
 # Install dependencies
 npm install
