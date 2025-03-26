@@ -4,12 +4,10 @@ const multer = require('multer');
 const pdf = require('pdf-parse');
 const path = require('path');
 const fs = require('fs');
-
 const { FaissStore } = require('@langchain/community/vectorstores/faiss');
 const { Document } = require('@langchain/core/documents');
 const { RecursiveCharacterTextSplitter } = require('langchain/text_splitter');
 const { HuggingFaceTransformersEmbeddings } = require('@langchain/community/embeddings/hf_transformers');
-const { ChatOllama } = require('@langchain/community/chat_models/ollama');
 
 const app = express();
 app.use(express.json());
@@ -25,63 +23,88 @@ const embeddings = new HuggingFaceTransformersEmbeddings({
     modelName: 'Xenova/all-MiniLM-L6-v2'
 });
 
-const llm = new ChatOllama({
-    baseUrl: 'http://localhost:11434',
-    model: 'mistral'
-});
-
 const upload = multer({ dest: 'uploads/' });
 let vectorStore;
 
-// **Load or Create Vector Store**
+// Improved vector store loading
 async function loadVectorStore() {
     if (!vectorStore) {
         try {
             vectorStore = await FaissStore.load('./faiss_store', embeddings);
-            console.log('FAISS index loaded.');
+            console.log('FAISS index loaded');
         } catch (error) {
-            console.warn('FAISS index not found, initializing new store.');
-            vectorStore = new FaissStore(embeddings);
+            console.warn('Initializing new FAISS store');
+            vectorStore = await FaissStore.fromDocuments([], embeddings); // Initialize with empty docs
+            await vectorStore.save('./faiss_store');
         }
     }
 }
 
-//  **Process PDF Files**
-async function processPDF(filePath) {
+// Enhanced Gemini query function
+async function queryGemini(message, context) {
+    const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
     try {
-        const dataBuffer = fs.readFileSync(filePath);
-        const data = await pdf(dataBuffer);
-        return data.text.split('\f').map(page => page.trim()); // Split by page
+        const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [{
+                        text: `Context:\n${context}\n\nQuestion: ${message}\nAnswer:`
+                    }]
+                }]
+            })
+        });
+
+        const data = await response.json();
+        return data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response from AI.";
     } catch (error) {
-        throw new Error(`PDF processing failed: ${error.message}`);
+        console.error("Gemini API error:", error);
+        return "Failed to fetch response.";
     }
 }
 
-//  **Initialize Vector Store with Documents**
+// Unified document processing
+async function processDocuments(content, metadata) {
+    const newDocs = content.map(text =>
+        new Document({
+            pageContent: text,
+            metadata: metadata
+        })
+    );
+
+    const processedDocs = await textSplitter.splitDocuments(newDocs);
+    await vectorStore.addDocuments(processedDocs);
+    await vectorStore.save('./faiss_store');
+
+    return processedDocs;
+}
+
+// API Endpoints
 app.post('/api/initialize', async (req, res) => {
     try {
-        if (!req.body.documents || !Array.isArray(req.body.documents)) {
+        if (!Array.isArray(req.body.documents)) {
             return res.status(400).json({ error: 'Documents array required' });
         }
 
         await loadVectorStore();
 
-        const docs = req.body.documents.map(text =>
-            new Document({ pageContent: text, metadata: { source: 'user' } })
+        const processed = await processDocuments(
+            req.body.documents.map(d => typeof d === 'string' ? d : d.text),
+            { source: 'user-provided' }
         );
 
-        const processedDocs = await textSplitter.splitDocuments(docs);
-        await vectorStore.addDocuments(processedDocs);
-        await vectorStore.save('./faiss_store');
-
-        res.status(200).json({ success: true, chunks: processedDocs.length });
+        res.json({
+            success: true,
+            chunks: processed.length
+        });
     } catch (error) {
         console.error('Initialization error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-//  **Handle Chat Requests**
 app.post('/api/chat', async (req, res) => {
     try {
         const { message } = req.body;
@@ -90,72 +113,50 @@ app.post('/api/chat', async (req, res) => {
         }
 
         await loadVectorStore();
-
         const relevantDocs = await vectorStore.similaritySearch(message, 3);
         const context = relevantDocs.map(doc => doc.pageContent).join('\n\n');
+        const response = await queryGemini(message, context);
 
-        const response = await llm.invoke([
-            ['system', `Answer based on this context:\n${context}`],
-            ['user', message]
-        ]);
-
-        res.json({ response: response.content });
+        res.json({ response });
     } catch (error) {
         console.error('Chat error:', error);
         res.status(500).json({ error: 'Failed to process request' });
     }
 });
 
-//  **Handle PDF Upload & Processing**
 app.post('/api/upload', upload.single('file'), async (req, res) => {
     try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'No file uploaded' });
-        }
+        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
         const filePath = req.file.path;
-        const fileType = path.extname(req.file.originalname).toLowerCase();
+        const ext = path.extname(req.file.originalname).toLowerCase();
 
-        if (fileType !== '.pdf') {
-            fs.unlinkSync(filePath); // Delete unsupported file
+        if (ext !== '.pdf') {
+            fs.unlinkSync(filePath);
             return res.status(400).json({ error: 'Only PDF files are supported' });
         }
 
-        const content = await processPDF(filePath);
+        const content = await pdf(fs.readFileSync(filePath));
+        const textChunks = content.text.split('\n').filter(Boolean);
 
         await loadVectorStore();
-
-        const newDocs = content.map(text =>
-            new Document({
-                pageContent: text,
-                metadata: {
-                    source: req.file.originalname,
-                    type: 'pdf',
-                    pages: content.length
-                }
-            })
-        );
-
-        const processedDocs = await textSplitter.splitDocuments(newDocs);
-        await vectorStore.addDocuments(processedDocs);
-        await vectorStore.save('./faiss_store');
-
-        fs.unlinkSync(filePath); // Cleanup after processing
-        res.json({
-            success: true,
-            pages: content.length,
-            chunks: processedDocs.length
+        const processed = await processDocuments(textChunks, {
+            source: req.file.originalname,
+            type: 'pdf'
         });
 
+        fs.unlinkSync(filePath);
+        res.json({
+            success: true,
+            pages: textChunks.length,
+            chunks: processed.length
+        });
     } catch (error) {
-        fs.unlinkSync(req.file?.path);
         console.error('Upload error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-//  **Start Server**
+// Server start
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
