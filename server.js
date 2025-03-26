@@ -1,5 +1,10 @@
 require('dotenv').config();
 const express = require('express');
+const multer = require('multer');
+const pdf = require('pdf-parse');
+const path = require('path');
+const fs = require('fs');
+
 const { FaissStore } = require('@langchain/community/vectorstores/faiss');
 const { Document } = require('@langchain/core/documents');
 const { RecursiveCharacterTextSplitter } = require('langchain/text_splitter');
@@ -25,68 +30,70 @@ const llm = new ChatOllama({
     model: 'mistral'
 });
 
+const upload = multer({ dest: 'uploads/' });
 let vectorStore;
 
-// API Endpoints
+// **Load or Create Vector Store**
+async function loadVectorStore() {
+    if (!vectorStore) {
+        try {
+            vectorStore = await FaissStore.load('./faiss_store', embeddings);
+            console.log('FAISS index loaded.');
+        } catch (error) {
+            console.warn('FAISS index not found, initializing new store.');
+            vectorStore = new FaissStore(embeddings);
+        }
+    }
+}
+
+//  **Process PDF Files**
+async function processPDF(filePath) {
+    try {
+        const dataBuffer = fs.readFileSync(filePath);
+        const data = await pdf(dataBuffer);
+        return data.text.split('\f').map(page => page.trim()); // Split by page
+    } catch (error) {
+        throw new Error(`PDF processing failed: ${error.message}`);
+    }
+}
+
+//  **Initialize Vector Store with Documents**
 app.post('/api/initialize', async (req, res) => {
     try {
-        // Validate input
         if (!req.body.documents || !Array.isArray(req.body.documents)) {
             return res.status(400).json({ error: 'Documents array required' });
         }
 
-        // Create documents with metadata
+        await loadVectorStore();
+
         const docs = req.body.documents.map(text =>
-            new Document({
-                pageContent: text,
-                metadata: { source: 'user' }
-            })
+            new Document({ pageContent: text, metadata: { source: 'user' } })
         );
 
-        // Process documents
         const processedDocs = await textSplitter.splitDocuments(docs);
-        console.log('Processed', processedDocs.length, 'document chunks');
-
-        // Create and save FAISS index
-        vectorStore = await FaissStore.fromDocuments(processedDocs, embeddings);
+        await vectorStore.addDocuments(processedDocs);
         await vectorStore.save('./faiss_store');
-        console.log('FAISS index saved');
 
-        res.status(200).json({ success: true });
+        res.status(200).json({ success: true, chunks: processedDocs.length });
     } catch (error) {
         console.error('Initialization error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
+//  **Handle Chat Requests**
 app.post('/api/chat', async (req, res) => {
     try {
         const { message } = req.body;
-
-        // Validate input
         if (!message || typeof message !== 'string') {
             return res.status(400).json({ error: 'Message string required' });
         }
 
-        // Load index if not loaded
-        if (!vectorStore) {
-            try {
-                vectorStore = await FaissStore.load('./faiss_store', embeddings);
-                console.log('Loaded FAISS index from disk');
-            } catch (error) {
-                console.error('Error loading FAISS index:', error);
-                return res.status(500).json({ error: 'Failed to load vector store' });
-            }
-        }
+        await loadVectorStore();
 
-        // Get relevant documents
         const relevantDocs = await vectorStore.similaritySearch(message, 3);
-        console.log('Found', relevantDocs.length, 'relevant documents');
-
-        // Create context
         const context = relevantDocs.map(doc => doc.pageContent).join('\n\n');
 
-        // Generate response
         const response = await llm.invoke([
             ['system', `Answer based on this context:\n${context}`],
             ['user', message]
@@ -99,5 +106,56 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
+//  **Handle PDF Upload & Processing**
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        const filePath = req.file.path;
+        const fileType = path.extname(req.file.originalname).toLowerCase();
+
+        if (fileType !== '.pdf') {
+            fs.unlinkSync(filePath); // Delete unsupported file
+            return res.status(400).json({ error: 'Only PDF files are supported' });
+        }
+
+        const content = await processPDF(filePath);
+
+        await loadVectorStore();
+
+        const newDocs = content.map(text =>
+            new Document({
+                pageContent: text,
+                metadata: {
+                    source: req.file.originalname,
+                    type: 'pdf',
+                    pages: content.length
+                }
+            })
+        );
+
+        const processedDocs = await textSplitter.splitDocuments(newDocs);
+        await vectorStore.addDocuments(processedDocs);
+        await vectorStore.save('./faiss_store');
+
+        fs.unlinkSync(filePath); // Cleanup after processing
+        res.json({
+            success: true,
+            pages: content.length,
+            chunks: processedDocs.length
+        });
+
+    } catch (error) {
+        fs.unlinkSync(req.file?.path);
+        console.error('Upload error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+//  **Start Server**
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
